@@ -5,7 +5,7 @@ import bluetooth
 import os
 import bootsel
 import asyncio
-from plantbot_server import connect_websocket
+from server_connection import ServerConnection
 
 # configure WiFi as a station interface, to connect to a router
 sta_if = network.WLAN(network.STA_IF)
@@ -18,14 +18,16 @@ WIFI_CREDENTIALS_FILE = "wifi_credentials.txt"
 WIFI_CREDENTIALS_SERVICE_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef0")
 WIFI_SSID_CHAR_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef1")
 WIFI_PASSWORD_CHAR_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef2")
-WIFI_NOTIFICATIONS_CHAR_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef3")
+CONNECT_UUID_CHAR_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef3")
+WIFI_NOTIFICATIONS_CHAR_UUID = bluetooth.UUID("12345678-1234-5678-1234-56789abcdef4")
 
 # create the GATT BLE Server and specify operations
-credentials_service = aioble.Service(WIFI_CREDENTIALS_SERVICE_UUID)
-ssid_characteristic = aioble.Characteristic(credentials_service, WIFI_SSID_CHAR_UUID, read=True, write=True, capture=True)
-password_characteristic = aioble.Characteristic(credentials_service, WIFI_PASSWORD_CHAR_UUID, read=True, write=True, capture=True)
-notifications_characteristic = aioble.Characteristic(credentials_service, WIFI_NOTIFICATIONS_CHAR_UUID, notify=True)
-aioble.register_services(credentials_service)
+configuration_service = aioble.Service(WIFI_CREDENTIALS_SERVICE_UUID)
+ssid_characteristic = aioble.Characteristic(configuration_service, WIFI_SSID_CHAR_UUID, read=True, write=True, capture=True)
+password_characteristic = aioble.Characteristic(configuration_service, WIFI_PASSWORD_CHAR_UUID, read=True, write=True, capture=True)
+connect_uuid_characteristic = aioble.Characteristic(configuration_service, CONNECT_UUID_CHAR_UUID, read=True, write=True, capture=True)
+notifications_characteristic = aioble.Characteristic(configuration_service, WIFI_NOTIFICATIONS_CHAR_UUID, notify=True)
+aioble.register_services(configuration_service)
 
 
 # functions to read, write and delete from the WIFI_CREDENTIALS_FILE so the PlantBot can reconnect after a power loss or disconnection
@@ -75,8 +77,12 @@ async def credentials_write(connection):
     conn, encoded_password = await password_characteristic.written()
     wifi_password = encoded_password.decode('utf-8')
     
+    conn, encoded_connect_uuid = await connect_uuid_characteristic.written()
+    connect_uuid = encoded_connect_uuid.decode('utf-8')
+    
     print(wifi_ssid)
     print(wifi_password)
+    print(connect_uuid)
     write_wifi_credentials(wifi_ssid, wifi_password)
 
     notifications_characteristic.notify(connection, b'connecting:starting')
@@ -87,7 +93,14 @@ async def credentials_write(connection):
         return
 
     notifications_characteristic.notify(connection, b'connecting:connected')
-    connect_websocket()
+    
+    # blocking other code execution because connection.listen loops forever.
+    server = ServerConnection('ws://192.168.1.152/', connect_uuid)
+    
+    def log_messages(msg):
+        print(msg)
+
+    server.listen(log_messages)
     
 
 # function to start BLE advertising and listen for writes
